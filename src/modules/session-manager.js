@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise"
 import { ChatSession } from "./chat-session.js"
 
-export class ImprovedSessionManager {
+export class SessionManager {
   constructor(dbConfig) {
     this.sessions = new Map()
     this.dbConfig = dbConfig

@@ -1,4 +1,4 @@
-export class ImprovedChatSession {
+export class ChatSession {
   constructor(phoneNumber) {
     this.phoneNumber = phoneNumber
     this.currentFlow = "greeting"
