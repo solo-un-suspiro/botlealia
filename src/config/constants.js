@@ -45,8 +45,8 @@ export const MENU_OPTIONS = {
     "5️⃣ Volver al menú principal",
   ],
   COIN_ISSUES: [
-    "1️⃣ Las monedas que tengo no coinciden",
-    "2️⃣ No tengo monedas correspondientes al mes",
+    "1️⃣ Los puntos que tengo no coinciden",
+    "2️⃣ No tengo puntos correspondientes al mes",
     "3️⃣ Volver al menú principal",
   ],
   PORTAL_PROBLEMS: [
@@ -76,7 +76,7 @@ export const EMAIL_TEMPLATES = {
   },
   COIN_DISCREPANCY: {
     to: "mescobar@centiva.mx",
-    subject: "Discrepancia en monedas - Reporte desde WhatsApp",
+    subject: "Discrepancia en puntos - Reporte desde WhatsApp",
   },
   ADDRESS_CHANGE: {
     to: "mescobar@centiva.mx",
