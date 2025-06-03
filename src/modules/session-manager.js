@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise"
 import { ChatSession } from "./chat-session.js"
 
-export class SessionManager {
+export class ImprovedSessionManager {
   constructor(dbConfig) {
     this.sessions = new Map()
     this.dbConfig = dbConfig
@@ -9,60 +9,82 @@ export class SessionManager {
     this.isDbInitialized = false
     this.connectionRetries = 0
     this.maxRetries = 5
-    this.retryDelay = 5000 // 5 segundos
+    this.retryDelay = 5000
     this.dbKeepAliveTimer = null
-    this.dbKeepAliveInterval = 30000 // 30 segundos
+    this.dbKeepAliveInterval = 30000
     this.lastQueryTime = Date.now()
-    this.queryTimeout = 10000 // 10 segundos
+    this.queryTimeout = 15000 // Aumentado a 15 segundos
+    this.reconnectInProgress = false
+    this.messageProcessingLock = new Map() // Prevenir procesamiento concurrente
   }
 
   async initializeDbConnection() {
-    if (this.pool) {
-      try {
-        await this.pool.end()
-        console.log("Closed previous connection pool")
-      } catch (err) {
-        console.log("Error closing previous pool:", err.message)
-      }
-      this.pool = null
+    if (this.reconnectInProgress) {
+      console.log("Reconexión ya en progreso, esperando...")
+      return false
     }
 
+    this.reconnectInProgress = true
+
     try {
-      // Create a connection pool with conservative settings
+      if (this.pool) {
+        try {
+          await this.pool.end()
+          console.log("Closed previous connection pool")
+        } catch (err) {
+          console.log("Error closing previous pool:", err.message)
+        }
+        this.pool = null
+      }
+
+      // Configuración más robusta del pool
       this.pool = mysql.createPool({
         ...this.dbConfig,
         waitForConnections: true,
-        connectionLimit: 5,
+        connectionLimit: 3, // Reducido para evitar sobrecarga
         queueLimit: 0,
         enableKeepAlive: true,
         keepAliveInitialDelay: 10000,
         namedPlaceholders: true,
         connectTimeout: 30000,
+        acquireTimeout: 30000,
+        timeout: 30000,
         socketPath: undefined,
         charset: "utf8mb4",
+        reconnect: true,
+        idleTimeout: 300000, // 5 minutos
+        maxIdle: 2,
       })
 
-      // Test the connection
-      const connection = await this.pool.getConnection()
-      console.log("Conexión a la base de datos establecida")
-      connection.release()
+      // Test de conexión con timeout
+      const testConnection = await Promise.race([
+        this.pool.getConnection(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Connection timeout")), 10000)),
+      ])
+
+      console.log("✅ Conexión a la base de datos establecida")
+      testConnection.release()
 
       this.isDbInitialized = true
       this.connectionRetries = 0
       this.startDbKeepAlive()
       return true
     } catch (error) {
-      console.error(`Error al establecer la conexión a la base de datos:`, error)
+      console.error(`❌ Error al establecer la conexión a la base de datos:`, error.message)
       this.connectionRetries++
 
       if (this.connectionRetries < this.maxRetries) {
-        console.log(`Reintentando en ${this.retryDelay / 1000} segundos...`)
+        console.log(
+          `🔄 Reintentando en ${this.retryDelay / 1000} segundos... (${this.connectionRetries}/${this.maxRetries})`,
+        )
         await new Promise((resolve) => setTimeout(resolve, this.retryDelay))
         return this.initializeDbConnection()
       } else {
-        console.error(`No se pudo establecer la conexión después de ${this.maxRetries} intentos`)
+        console.error(`💥 No se pudo establecer la conexión después de ${this.maxRetries} intentos`)
         return false
       }
+    } finally {
+      this.reconnectInProgress = false
     }
   }
 
@@ -73,60 +95,60 @@ export class SessionManager {
 
     this.dbKeepAliveTimer = setInterval(async () => {
       try {
-        // Only ping if no query has been executed recently
         const timeSinceLastQuery = Date.now() - this.lastQueryTime
         if (timeSinceLastQuery > this.dbKeepAliveInterval) {
-          console.log("Ejecutando ping para mantener la conexión activa...")
+          console.log("🏓 Ejecutando ping para mantener la conexión activa...")
 
-          // Use a promise with timeout to prevent hanging
-          const pingPromise = this.pool.query("SELECT 1")
+          const pingPromise = this.pool.query("SELECT 1 as ping")
           const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error("Ping timeout")), this.queryTimeout),
           )
 
           await Promise.race([pingPromise, timeoutPromise])
-          console.log("Ping exitoso, conexión mantenida activa")
+          console.log("✅ Ping exitoso, conexión mantenida activa")
+          this.lastQueryTime = Date.now()
         }
       } catch (error) {
-        console.error("Error en el ping de keep-alive:", error.message)
+        console.error("❌ Error en el ping de keep-alive:", error.message)
 
-        // If ping fails, try to reinitialize the connection
-        console.log("Intentando reinicializar la conexión...")
-        await this.initializeDbConnection()
+        // Intentar reinicializar solo si no hay una reconexión en progreso
+        if (!this.reconnectInProgress) {
+          console.log("🔄 Intentando reinicializar la conexión...")
+          await this.initializeDbConnection()
+        }
       }
     }, this.dbKeepAliveInterval)
   }
 
   async ensureConnection() {
-    if (!this.pool || !this.isDbInitialized) {
+    if (!this.pool || !this.isDbInitialized || this.reconnectInProgress) {
       return await this.initializeDbConnection()
     }
 
     try {
-      // Quick test to see if the pool is still working
-      const connection = await this.pool.getConnection()
+      const connection = await Promise.race([
+        this.pool.getConnection(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Connection test timeout")), 5000)),
+      ])
       connection.release()
       return true
     } catch (error) {
-      console.error("Error al verificar la conexión:", error.message)
+      console.error("❌ Error al verificar la conexión:", error.message)
       return await this.initializeDbConnection()
     }
   }
 
   async executeQuery(query, values, retryCount = 0) {
-    const maxQueryRetries = 3
+    const maxQueryRetries = 2 // Reducido para evitar loops largos
 
-    // Ensure we have a connection before executing the query
     const connected = await this.ensureConnection()
     if (!connected) {
       throw new Error("No se pudo establecer la conexión a la base de datos")
     }
 
     try {
-      // Update last query time
       this.lastQueryTime = Date.now()
 
-      // Execute the query with a timeout
       const queryPromise = this.pool.query(query, values)
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Query timeout")), this.queryTimeout),
@@ -135,88 +157,125 @@ export class SessionManager {
       const [result] = await Promise.race([queryPromise, timeoutPromise])
       return result
     } catch (error) {
-      console.error(`Error ejecutando la consulta (intento ${retryCount + 1}):`, error.message)
+      console.error(`❌ Error ejecutando la consulta (intento ${retryCount + 1}):`, error.message)
 
-      // Check if we should retry
       if (retryCount < maxQueryRetries) {
-        console.log(`Reintentando consulta en 1 segundo...`)
-        await new Promise((resolve) => setTimeout(resolve, 1000))
+        console.log(`🔄 Reintentando consulta en 2 segundos...`)
+        await new Promise((resolve) => setTimeout(resolve, 2000))
 
-        // Reinitialize connection if it seems to be the issue
         if (
           error.code === "PROTOCOL_CONNECTION_LOST" ||
           error.code === "ECONNRESET" ||
-          error.code === "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR"
+          error.code === "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR" ||
+          error.message.includes("timeout")
         ) {
           await this.initializeDbConnection()
         }
 
-        // Retry the query
         return this.executeQuery(query, values, retryCount + 1)
       }
 
-      // If we've exhausted retries, throw the error
       throw error
     }
   }
 
-  async closeConnection() {
-    if (this.dbKeepAliveTimer) {
-      clearInterval(this.dbKeepAliveTimer)
+  // Método para prevenir procesamiento concurrente de mensajes
+  async lockMessageProcessing(chatId) {
+    if (this.messageProcessingLock.has(chatId)) {
+      console.log(`⏳ Mensaje ya siendo procesado para ${chatId}, ignorando...`)
+      return false
     }
 
-    if (this.pool) {
-      try {
-        await this.pool.end()
-        console.log("Conexión a la base de datos cerrada correctamente")
-      } catch (error) {
-        console.error("Error al cerrar la conexión a la base de datos:", error.message)
-      }
-    }
+    this.messageProcessingLock.set(chatId, Date.now())
+    return true
+  }
+
+  unlockMessageProcessing(chatId) {
+    this.messageProcessingLock.delete(chatId)
   }
 
   getSession(chatId) {
     if (!this.sessions.has(chatId)) {
+      console.log(`🆕 Creando nueva sesión para ${chatId}`)
       this.sessions.set(chatId, new ChatSession(chatId))
     }
     return this.sessions.get(chatId)
   }
 
   async saveSessionToDatabase(session) {
-    const duration = Math.floor((Date.now() - session.startTime) / 1000)
-    const query = `
-    INSERT INTO chat_sessions 
-    (chat_id, start_time, duration, report_id, conversation_history, survey_responses) 
-    VALUES (?, ?, ?, ?, ?, ?)
-  `
-    const values = [
-      session.chatId,
-      new Date(session.startTime)
-        .toISOString()
-        .slice(0, 19)
-        .replace("T", " "), // Formato MySQL datetime
-      duration,
-      session.reportId,
-      JSON.stringify(session.conversationHistory),
-      JSON.stringify(session.surveyResponses),
-    ]
-
     try {
+      const duration = Math.floor((Date.now() - session.startTime) / 1000)
+      const query = `
+        INSERT INTO chat_sessions 
+        (chat_id, start_time, duration, report_id, conversation_history, survey_responses) 
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+        duration = VALUES(duration),
+        conversation_history = VALUES(conversation_history),
+        survey_responses = VALUES(survey_responses)
+      `
+      const values = [
+        session.chatId,
+        new Date(session.startTime).toISOString().slice(0, 19).replace("T", " "),
+        duration,
+        session.reportId,
+        JSON.stringify(session.conversationHistory.slice(-50)), // Limitar historial
+        JSON.stringify(session.surveyResponses),
+      ]
+
       await this.executeQuery(query, values)
-      console.log(`[${new Date().toISOString()}] Sesión guardada en la base de datos para chatId: ${session.chatId}`)
+      console.log(`💾 Sesión guardada en la base de datos para chatId: ${session.chatId}`)
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] Error al guardar la sesión en la base de datos:`, error)
+      console.error(`❌ Error al guardar la sesión en la base de datos:`, error.message)
     }
   }
 
   async endSession(chatId) {
-    const session = this.sessions.get(chatId)
-    if (session) {
-      await this.saveSessionToDatabase(session)
+    try {
+      const session = this.sessions.get(chatId)
+      if (session) {
+        // Limpiar todos los timers
+        if (session.inactivityTimer) {
+          clearTimeout(session.inactivityTimer)
+          session.inactivityTimer = null
+        }
+        if (session.warningTimer) {
+          clearTimeout(session.warningTimer)
+          session.warningTimer = null
+        }
 
-      this.sessions.delete(chatId)
-      console.log(`[${new Date().toISOString()}] Sesión finalizada y guardada para chatId: ${chatId}`)
+        await this.saveSessionToDatabase(session)
+        this.sessions.delete(chatId)
+        this.unlockMessageProcessing(chatId)
+
+        console.log(`🗑️ Sesión finalizada y guardada para chatId: ${chatId}`)
+      }
+    } catch (error) {
+      console.error(`❌ Error al finalizar sesión:`, error.message)
+    }
+  }
+
+  async closeConnection() {
+    try {
+      if (this.dbKeepAliveTimer) {
+        clearInterval(this.dbKeepAliveTimer)
+        this.dbKeepAliveTimer = null
+      }
+
+      // Limpiar todas las sesiones
+      for (const [chatId, session] of this.sessions) {
+        if (session.inactivityTimer) clearTimeout(session.inactivityTimer)
+        if (session.warningTimer) clearTimeout(session.warningTimer)
+      }
+      this.sessions.clear()
+      this.messageProcessingLock.clear()
+
+      if (this.pool) {
+        await this.pool.end()
+        console.log("✅ Conexión a la base de datos cerrada correctamente")
+      }
+    } catch (error) {
+      console.error("❌ Error al cerrar la conexión a la base de datos:", error.message)
     }
   }
 }
-
