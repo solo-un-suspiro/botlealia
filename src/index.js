@@ -9,6 +9,7 @@ import { closeUserDbConnection } from "./modules/user-service.js"
 import { closeReportDbConnection } from "./modules/report-service.js"
 import { USER_DB_CONFIG } from "./config/constants.js"
 import { checkEnvVariables } from "./utils/env-checker.js"
+import { messageTracker } from "./utils/message-tracker.js"
 
 // Load environment variables
 dotenv.config()
@@ -50,11 +51,6 @@ async function connectToWhatsApp() {
 
   try {
     console.log("🚀 Iniciando conexión a WhatsApp...")
-
-    // Initialize baileys authentication state
-    // const authState = await useMultiFileAuthState("auth_info_baileys") // Moved outside the function
-    // const state = authState.state
-    // const saveCreds = authState.saveCreds
 
     const sock = makeWASocket({
       auth: state,
@@ -238,7 +234,14 @@ export async function sendMessage(sock, chatId, text) {
       const chunk = chunks[i]
 
       try {
-        await sock.sendMessage(chatId, { text: chunk })
+        // Enviar el mensaje
+        const sentMsg = await sock.sendMessage(chatId, { text: chunk })
+
+        // Registrar el ID del mensaje enviado por el bot
+        if (sentMsg && sentMsg.key && sentMsg.key.id) {
+          messageTracker.trackBotMessage(sentMsg.key.id)
+        }
+
         console.log(`📤 Mensaje enviado a ${chatId}: ${chunk.substring(0, 50)}...`)
 
         // Pequeño delay entre chunks para evitar spam

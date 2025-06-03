@@ -4,12 +4,25 @@ import { createReport } from "./report-service.js"
 import { withDatabaseFallback } from "../utils/database-utils.js"
 import { showMainMenu, handleMenuInput } from "./menu-handler.js"
 import { BusinessHours } from "../utils/business-hours.js"
+import { messageTracker } from "../utils/message-tracker.js"
 
 const businessHours = new BusinessHours()
 
 // Cache para prevenir mensajes duplicados
 const messageCache = new Map()
 const CACHE_DURATION = 5000 // 5 segundos
+
+// Lista de frases que indican fin de atención humana
+const END_HUMAN_SUPPORT_PHRASES = [
+  "fin de la atención humana. iniciando encuesta de satisfacción.",
+  "fin de la atencion humana.",
+  "fin de la atención humana",
+  "fin de la atencion humana",
+  "fin atencion humana",
+  "fin atención humana",
+  "finalizar atencion humana",
+  "finalizar atención humana",
+]
 
 function isDuplicateMessage(chatId, messageContent) {
   const key = `${chatId}:${messageContent}`
@@ -35,58 +48,187 @@ function isDuplicateMessage(chatId, messageContent) {
   return false
 }
 
+// Función para verificar si un mensaje es de fin de atención humana
+function isEndHumanSupportMessage(messageContent) {
+  const lowerMessage = messageContent.trim().toLowerCase()
+  return END_HUMAN_SUPPORT_PHRASES.some((phrase) => lowerMessage.includes(phrase))
+}
+
 async function handleSurvey(sock, chatId, messageContent, session, surveyManager, sessionManager) {
   console.log(`[SURVEY] Processing survey response: ${messageContent} for question ${session.currentSurveyQuestion}`)
 
-  if (session.currentSurveyQuestion < surveyManager.getTotalQuestions()) {
-    if (session.isValidSurveyResponse(messageContent)) {
-      console.log(`[SURVEY] Valid response received: ${messageContent}`)
-      session.addSurveyResponse(messageContent)
-      session.currentSurveyQuestion++
-      console.log(`[SURVEY] Moving to question ${session.currentSurveyQuestion}`)
-
-      if (session.currentSurveyQuestion < surveyManager.getTotalQuestions()) {
-        console.log(`[SURVEY] Sending next question: ${surveyManager.getQuestion(session.currentSurveyQuestion)}`)
-        await sendMessage(
-          sock,
-          chatId,
-          `${surveyManager.getQuestion(session.currentSurveyQuestion)}\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.`,
-        )
-      } else {
-        console.log(`[SURVEY] Survey completed, responses:`, session.surveyResponses)
-        await sendMessage(
-          sock,
-          chatId,
-          "🎉 ¡Gracias por completar nuestra encuesta! Tus respuestas son muy valiosas para mejorar el servicio de Lealia. ¡Que tengas un excelente día! 🌟",
-        )
-        session.isSurveyActive = false
-        try {
-          console.log(`[SURVEY] Ending session for user ${chatId}`)
-          await sessionManager.endSession(chatId)
-        } catch (error) {
-          console.error(`[SURVEY] Error ending session:`, error)
-        }
-      }
-    } else {
-      console.log(`[SURVEY] Invalid response received: ${messageContent}`)
+  try {
+    // Verificar que surveyManager está disponible
+    if (!surveyManager || typeof surveyManager.getTotalQuestions !== "function") {
+      console.error(`[SURVEY] Survey manager not available or missing getTotalQuestions method`)
       await sendMessage(
         sock,
         chatId,
-        `⚠️ Por favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.\n\n📊 ${surveyManager.getQuestion(session.currentSurveyQuestion)}`,
+        "Lo sentimos, hay un problema técnico con nuestra encuesta. Tu mensaje ha sido registrado. ¡Gracias por contactarnos!",
       )
+      session.isSurveyActive = false
+      return true
     }
+
+    const totalQuestions = surveyManager.getTotalQuestions()
+    console.log(`[SURVEY] Total questions: ${totalQuestions}, Current question: ${session.currentSurveyQuestion}`)
+
+    // Verificar que estamos dentro del rango de preguntas
+    if (session.currentSurveyQuestion < totalQuestions) {
+      // Verificar si la respuesta es válida
+      if (session.isValidSurveyResponse(messageContent)) {
+        console.log(`[SURVEY] Valid response received: ${messageContent}`)
+        session.addSurveyResponse(messageContent)
+        session.currentSurveyQuestion++
+        console.log(`[SURVEY] Moving to question ${session.currentSurveyQuestion}`)
+
+        // Verificar si hay más preguntas
+        if (session.currentSurveyQuestion < totalQuestions) {
+          const nextQuestion = surveyManager.getQuestion(session.currentSurveyQuestion)
+          console.log(`[SURVEY] Sending next question: ${nextQuestion}`)
+          await sendMessage(
+            sock,
+            chatId,
+            `📊 ${nextQuestion}\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.`,
+          )
+        } else {
+          // Encuesta completada
+          console.log(`[SURVEY] Survey completed, responses:`, session.surveyResponses)
+          await sendMessage(
+            sock,
+            chatId,
+            "🎉 ¡Gracias por completar nuestra encuesta! Tus respuestas son muy valiosas para mejorar el servicio de Lealia. ¡Que tengas un excelente día! 🌟",
+          )
+          session.isSurveyActive = false
+
+          try {
+            // Guardar respuestas y finalizar sesión
+            console.log(`[SURVEY] Saving survey responses and ending session for user ${chatId}`)
+            await sessionManager.saveSessionToDatabase(session)
+            await sessionManager.endSession(chatId)
+          } catch (error) {
+            console.error(`[SURVEY] Error ending session:`, error)
+          }
+        }
+      } else {
+        // Respuesta inválida
+        console.log(`[SURVEY] Invalid response received: ${messageContent}`)
+        const currentQuestion = surveyManager.getQuestion(session.currentSurveyQuestion)
+        await sendMessage(
+          sock,
+          chatId,
+          `⚠️ Por favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.\n\n📊 ${currentQuestion}`,
+        )
+      }
+      return true
+    } else {
+      // Fuera del rango de preguntas (no debería ocurrir)
+      console.log(`[SURVEY] Question index out of range: ${session.currentSurveyQuestion} >= ${totalQuestions}`)
+      session.isSurveyActive = false
+      return false
+    }
+  } catch (error) {
+    console.error(`[SURVEY] Error handling survey:`, error)
+    await sendMessage(
+      sock,
+      chatId,
+      "Lo sentimos, ha ocurrido un error al procesar tu respuesta. Por favor, intenta de nuevo más tarde.",
+    )
     return true
   }
-  return false
+}
+
+// Función para iniciar la encuesta de satisfacción
+async function startSatisfactionSurvey(sock, chatId, session, surveyManager, sessionManager) {
+  console.log(`[SURVEY] Starting satisfaction survey for user ${chatId}`)
+
+  try {
+    // Reiniciar la encuesta y configurar la sesión
+    session.isWaitingForHumanResponse = false
+    session.resetSurvey()
+
+    // Reanudar el temporizador de inactividad
+    session.resumeInactivityTimer(
+      async () => {
+        await sendMessage(sock, chatId, "¿Sigues ahí? Estoy aquí para ayudarte si tienes más preguntas.")
+      },
+      async () => {
+        await sendMessage(
+          sock,
+          chatId,
+          "Parece que no hay actividad. Si necesitas más ayuda, no dudes en contactarnos nuevamente. ¡Que tengas un buen día!",
+        )
+        await sessionManager.endSession(chatId)
+      },
+    )
+
+    // Enviar la primera pregunta de la encuesta
+    if (!surveyManager || typeof surveyManager.getQuestion !== "function") {
+      console.error(`[SURVEY] Survey manager not available or missing getQuestion method`)
+      await sendMessage(
+        sock,
+        chatId,
+        "📊 ¿Cómo calificarías la atención recibida?\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.",
+      )
+    } else {
+      const firstQuestion = surveyManager.getQuestion(0)
+      await sendMessage(
+        sock,
+        chatId,
+        `📊 ${firstQuestion}\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.`,
+      )
+    }
+
+    console.log(`[SURVEY] Survey started successfully for user ${chatId}`)
+    return true
+  } catch (error) {
+    console.error(`[SURVEY] Error starting survey:`, error)
+    await sendMessage(
+      sock,
+      chatId,
+      "📊 ¿Cómo calificarías la atención recibida?\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.",
+    )
+    return false
+  }
 }
 
 export async function handleMessage(sock, chatId, messageContent, msg, sessionManager, surveyManager) {
   try {
     console.log(`[MESSAGE] Handling message from ${chatId}: ${messageContent}`)
 
+    // Registrar el origen del mensaje usando nuestro sistema personalizado
+    const messageId = msg.key?.id
+    const messageOrigin = messageTracker.getMessageOrigin(msg)
+
+    console.log(`[MESSAGE] Message ID: ${messageId}, Origin: ${messageOrigin}`)
+
+    // Si el mensaje tiene un ID y no está en nuestro registro, asumimos que es de un humano
+    if (messageId && messageOrigin === "likely-human") {
+      messageTracker.trackHumanMessage(messageId)
+    }
+
+    // IMPORTANTE: Verificar primero si es un mensaje de fin de atención humana
+    // Esta verificación debe hacerse antes de comprobar si el mensaje es del bot
+    if (isEndHumanSupportMessage(messageContent)) {
+      console.log(`[HUMAN] Human support end message detected: "${messageContent}"`)
+
+      // Verificar si realmente es un mensaje humano o del bot
+      if (messageOrigin === "bot" || messageOrigin === "likely-bot") {
+        console.log(`[HUMAN] Warning: End message appears to be from the bot itself. Origin: ${messageOrigin}`)
+        // Podemos decidir si continuar o no basado en una configuración
+      }
+
+      // Obtener o crear la sesión
+      const session = sessionManager.getSession(chatId)
+
+      // Iniciar la encuesta de satisfacción
+      await startSatisfactionSurvey(sock, chatId, session, surveyManager, sessionManager)
+      return
+    }
+
     // Verificar si es mensaje del bot para evitar loops
-    if (msg.key.fromMe) {
-      console.log(`[MESSAGE] Ignoring bot's own message: ${messageContent}`)
+    if (messageOrigin === "bot" || messageOrigin === "likely-bot") {
+      console.log(`[MESSAGE] Ignoring bot's own message (origin: ${messageOrigin}): ${messageContent}`)
       return
     }
 
@@ -116,36 +258,6 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       // Verificar si estamos esperando respuesta humana
       if (!msg.key.fromMe && session.isWaitingForHumanResponse) {
         console.log(`[HUMAN] Message received while waiting for human response, ignoring bot processing`)
-        return
-      }
-
-      // Verificar mensaje de finalización de atención humana
-      if (
-        messageContent.trim().toLowerCase() === "fin de la atención humana. iniciando encuesta de satisfacción." ||
-        messageContent.trim().toLowerCase() === "fin de la atencion humana." ||
-        messageContent.trim().toLowerCase() === "fin de la atención humana"
-      ) {
-        console.log(`[HUMAN] Human support ended for user ${chatId}, starting satisfaction survey`)
-        session.isWaitingForHumanResponse = false
-        session.resetSurvey()
-        session.resumeInactivityTimer(
-          async () => {
-            await sendMessage(sock, chatId, "¿Sigues ahí? Estoy aquí para ayudarte si tienes más preguntas.")
-          },
-          async () => {
-            await sendMessage(
-              sock,
-              chatId,
-              "Parece que no hay actividad. Si necesitas más ayuda, no dudes en contactarnos nuevamente. ¡Que tengas un buen día!",
-            )
-            await sessionManager.endSession(chatId)
-          },
-        )
-        await sendMessage(
-          sock,
-          chatId,
-          `📊 ${surveyManager.getQuestion(0)}\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.`,
-        )
         return
       }
 
@@ -201,11 +313,32 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       // Asegurar conexión DB
       withDatabaseFallback(async () => await sessionManager.ensureConnection())
 
-      // MANEJO DE LA ENCUESTA
+      // MANEJO DE LA ENCUESTA - Versión mejorada
       if (session.isSurveyActive) {
-        console.log(`[SURVEY] Survey is active for user ${chatId}`)
-        const surveyHandled = await handleSurvey(sock, chatId, messageContent, session, surveyManager, sessionManager)
-        if (surveyHandled) return
+        console.log(`[SURVEY] Survey is active for user ${chatId}, question ${session.currentSurveyQuestion}`)
+        try {
+          const surveyHandled = await handleSurvey(sock, chatId, messageContent, session, surveyManager, sessionManager)
+          if (surveyHandled) {
+            console.log(`[SURVEY] Survey handling successful for user ${chatId}`)
+            return
+          } else {
+            console.log(`[SURVEY] Survey not handled, continuing with normal message processing`)
+          }
+        } catch (error) {
+          console.error(`[SURVEY] Error in survey handling:`, error)
+          // Continuar con el procesamiento normal si hay un error en la encuesta
+        }
+      }
+
+      // Verificar explícitamente si debemos iniciar una encuesta basada en el mensaje
+      if (
+        !session.isSurveyActive &&
+        (messageContent.toLowerCase().includes("iniciar encuesta") ||
+          messageContent.toLowerCase().includes("comenzar encuesta"))
+      ) {
+        console.log(`[SURVEY] Survey trigger phrase detected in regular message flow: "${messageContent}"`)
+        await startSatisfactionSurvey(sock, chatId, session, surveyManager, sessionManager)
+        return
       }
 
       // MANEJO DEL MENÚ
@@ -213,92 +346,6 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       const menuHandled = await handleMenuInput(sock, chatId, messageContent, session)
       if (menuHandled) {
         console.log(`[MENU] Menu input handled successfully for user ${chatId}`)
-        return
-      }
-
-      // Flujos específicos
-      if (
-        session.currentFlow === "forgot_credentials" ||
-        session.currentFlow === "portal_access" ||
-        session.currentFlow === "check_balance"
-      ) {
-        console.log(`[FLOW] Processing ${session.currentFlow} flow for user ${chatId}`)
-        await handleMenuInput(sock, chatId, messageText, session)
-        return
-      }
-
-      if (session.currentFlow === "points_discrepancy_followup") {
-        console.log(`[POINTS] Processing points discrepancy followup for user ${chatId}: ${messageText}`)
-        if (messageText === "1" || messageText.includes("sí") || messageText.includes("si")) {
-          console.log(`[POINTS] User ${chatId} needs additional help, collecting report data`)
-          session.isCollectingReportData = true
-          session.currentField = "name"
-          await sendMessage(
-            sock,
-            chatId,
-            `Entiendo que necesitas ayuda adicional para resolver tu problema. Voy a crear un reporte para que un agente de soporte te contacte y pueda ayudarte de manera más personalizada. Por favor, proporciona la siguiente información:\n\nPrimero, ¿cuál es tu nombre completo?`,
-          )
-        } else if (messageText === "2" || messageText.includes("no")) {
-          console.log(`[POINTS] User ${chatId} doesn't need additional help, ending conversation`)
-          await sendMessage(sock, chatId, "¡Gracias por contactarnos! Esperamos haber resuelto tu duda. 😊")
-          session.isSurveyActive = true
-          session.currentSurveyQuestion = 0
-          await sendMessage(
-            sock,
-            chatId,
-            `📊 ${surveyManager.getQuestion(0)}\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.`,
-          )
-        } else {
-          console.log(`[POINTS] Invalid response from user ${chatId}: ${messageText}`)
-          await sendMessage(sock, chatId, "Por favor, responde con:\n1️⃣ Sí, necesito más ayuda\n2️⃣ No, gracias")
-        }
-        return
-      }
-
-      // Flujo de preguntas de puntos
-      if (session.currentFlow === "points_questions" && session.currentStep === "awaiting_selection") {
-        console.log(`[POINTS] Processing points questions selection for user ${chatId}: ${messageText}`)
-        if (messageText === "1") {
-          console.log(`[POINTS] User ${chatId} selected coin discrepancy`)
-          session.currentFlow = "points_discrepancy_followup"
-          await sendMessage(
-            sock,
-            chatId,
-            "¿Necesitas que te transfiera con un agente humano para revisar tu caso?\n1️⃣ Sí, necesito más ayuda\n2️⃣ No, gracias",
-          )
-        } else if (messageText === "2") {
-          console.log(`[POINTS] User ${chatId} selected no monthly coins`)
-          await sendMessage(sock, chatId, "Entendido, te ayudaremos con eso.")
-        } else if (messageText === "3") {
-          console.log(`[POINTS] User ${chatId} returning to main menu`)
-          await showMainMenu(sock, chatId, session)
-        } else {
-          console.log(`[POINTS] Invalid selection from user ${chatId}: ${messageText}`)
-          await sendMessage(sock, chatId, "Por favor, selecciona una opción válida (1-3):")
-        }
-        return
-      }
-
-      // Flujo de problemas del portal
-      if (session.currentFlow === "portal_problems" && session.currentStep === "awaiting_selection") {
-        console.log(`[PORTAL] Processing portal problems selection for user ${chatId}: ${messageText}`)
-        if (messageText === "1") {
-          console.log(`[PORTAL] User ${chatId} selected portal access problem`)
-          session.currentFlow = "portal_access"
-          await sendMessage(sock, chatId, "Entendido, te ayudaremos con el acceso al portal.")
-        } else if (messageText === "2") {
-          console.log(`[PORTAL] User ${chatId} selected cannot make order`)
-          await sendMessage(sock, chatId, "Entendido, te ayudaremos con el pedido.")
-        } else if (messageText === "3") {
-          console.log(`[PORTAL] User ${chatId} selected no points loaded`)
-          await sendMessage(sock, chatId, "Entendido, te ayudaremos con los puntos.")
-        } else if (messageText === "4") {
-          console.log(`[PORTAL] User ${chatId} returning to main menu`)
-          await showMainMenu(sock, chatId, session)
-        } else {
-          console.log(`[PORTAL] Invalid selection from user ${chatId}: ${messageText}`)
-          await sendMessage(sock, chatId, "Por favor, selecciona una opción válida (1-4):")
-        }
         return
       }
 
