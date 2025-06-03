@@ -1,7 +1,7 @@
 import { makeWASocket, DisconnectReason, useMultiFileAuthState } from "@whiskeysockets/baileys"
 import NodeCache from "node-cache"
 import dotenv from "dotenv"
-import { ImprovedSessionManager } from "./modules/session-manager.js"
+import { SessionManager } from "./modules/session-manager.js"
 import { SurveyManager } from "./modules/survey-manager.js"
 import { handleMessage } from "./modules/message-handler.js"
 import { withDatabaseFallback } from "./utils/database-utils.js"
@@ -27,7 +27,7 @@ console.log(`Contraseña configurada: ${USER_DB_CONFIG.password ? "Sí" : "No"}`
 const msgRetryCache = new NodeCache()
 
 // Create global instances of managers
-const sessionManager = new ImprovedSessionManager(USER_DB_CONFIG)
+const sessionManager = new SessionManager(USER_DB_CONFIG)
 const surveyManager = new SurveyManager()
 
 // Variables para control de reconexión
