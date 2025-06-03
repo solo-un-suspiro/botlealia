@@ -21,7 +21,16 @@ export async function handleMainMenu(sock, chatId, option, session) {
       )
       session.setMenuState("ORDER_PROBLEMS")
       break
-    case "3": // Duda de mi carga de puntos
+    case "3": // Realizar un pedido especial (NUEVO)
+      console.log(`[MENU] User ${chatId} requesting special order`)
+      await sendMessage(
+        sock,
+        chatId,
+        "🛒✨ ¡Excelente! Puedes realizar tu pedido especial directamente en nuestro portal especializado:\n\n🔗 https://tienda.lealia.com.mx/pedidos-especiales\n\n📋 En esta sección encontrarás:\n• Productos exclusivos 🎁\n• Opciones de personalización 🎨\n• Pedidos por volumen 📦\n• Artículos especiales ⭐\n\n💡 Si necesitas ayuda navegando el portal o tienes dudas sobre algún producto especial, ¡no dudes en contactarnos!",
+      )
+      await showClosingMenu(sock, chatId, session)
+      break
+    case "4": // Duda de mi carga de puntos (antes era 3)
       console.log(`[MENU] Starting points questions flow for user ${chatId}`)
       await sendMessage(
         sock,
@@ -30,7 +39,7 @@ export async function handleMainMenu(sock, chatId, option, session) {
       )
       session.setMenuState("COIN_ISSUES")
       break
-    case "4": // Problemas con mi portal
+    case "5": // Problemas con mi portal (antes era 4)
       console.log(`[MENU] Starting portal problems flow for user ${chatId}`)
       await sendMessage(
         sock,
@@ -39,23 +48,23 @@ export async function handleMainMenu(sock, chatId, option, session) {
       )
       session.setMenuState("PORTAL_PROBLEMS")
       break
-    case "5": // Dirección de entrega
+    case "6": // Dirección de entrega (antes era 5)
       console.log(`[MENU] Starting delivery address flow for user ${chatId}`)
       await sendMessage(
         sock,
         chatId,
-        "Todos los productos se envían a tu sucursal. En caso de que la sucursal haya cambiado de domicilio debes mandar un correo a *mescobar@centiva.mx con copia a acoronel@centiva.mx y amarrieta@centiva.mx* indicando tu RFC, SUCURSAL y dirección completa de la nueva sucursal, de igual manera indicando brevemente el motivo por el cual solicitas que se envíe ahí.",
+        "📍 Todos los productos se envían a tu sucursal. En caso de que la sucursal haya cambiado de domicilio debes mandar un correo a *mescobar@centiva.mx con copia a acoronel@centiva.mx y amarrieta@centiva.mx* indicando tu RFC, SUCURSAL y dirección completa de la nueva sucursal, de igual manera indicando brevemente el motivo por el cual solicitas que se envíe ahí.",
       )
       await showClosingMenu(sock, chatId, session)
       break
-    case "6": // Consultar Saldo
+    case "7": // Consultar Saldo (antes era 6)
       console.log(`[MENU] Starting balance check flow for user ${chatId}`)
       await sendMessage(sock, chatId, "Con gusto te apoyamos. ¿Me confirmas RFC a 10 dígitos? Por favor.")
       session.clearUserData()
       session.setUserDataCollection("rfc")
       session.menuState.currentStep = "CHECK_BALANCE_RFC"
       break
-    case "7": // Terminar sesión
+    case "8": // Terminar sesión (antes era 7)
       console.log(`[MENU] User ${chatId} ending session`)
       await endSession(sock, chatId, session)
       break
@@ -63,7 +72,7 @@ export async function handleMainMenu(sock, chatId, option, session) {
       console.log(`[MENU] User ${chatId} returning to main menu`)
       await showMainMenu(sock, chatId, session)
       break
-      case "Hola": // Volver al menú principal
+    case "Hola": // Volver al menú principal
       console.log(`[MENU] User ${chatId} returning to main menu`)
       await showMainMenu(sock, chatId, session)
       break
@@ -705,14 +714,15 @@ export async function showMainMenu(sock, chatId, session) {
     "👋 ¡Bienvenido a Lealia! ¿En qué podemos ayudarte hoy?\n\n" +
       "1️⃣ Olvidé Usuario o Contraseña\n" +
       "2️⃣ Problemas con mi pedido\n" +
-      "3️⃣ Duda de mi carga de puntos\n" +
-      "4️⃣ Problemas con mi portal\n" +
-      "5️⃣ Dirección de entrega\n" +
-      "6️⃣ Consultar Saldo\n" +
-      "7️⃣ Terminar sesión\n\n" +
+      "3️⃣ Realizar un pedido especial\n" +
+      "4️⃣ Duda de mi carga de puntos\n" +
+      "5️⃣ Problemas con mi portal\n" +
+      "6️⃣ Dirección de entrega\n" +
+      "7️⃣ Consultar Saldo\n" +
+      "8️⃣ Terminar sesión\n\n" +
       "Por favor, selecciona una opción del menú:",
   )
-  session.setMenuState("MAIN_MENU" + session.currentMenu)
+  session.setMenuState("MAIN_MENU")
   session.resetMenuState()
 }
 

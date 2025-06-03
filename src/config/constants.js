@@ -1,6 +1,6 @@
 // Company information
 export const COMPANY_INFO =
-  "Programa Ganadores es una plataforma que permite a los empleados canjear puntos por diversos productos y tarjetas de regalo."
+  "Lealia es una plataforma que permite a los empleados canjear puntos por diversos productos y tarjetas de regalo."
 
 // Database configuration
 export const DB_CONFIG = {
@@ -28,15 +28,14 @@ export const MAX_MESSAGE_LENGTH = 2000 // Longitud máxima de un mensaje
 // Menu options
 export const MENU_OPTIONS = {
   MAIN_MENU: [
-    "👋 ¡Bienvenido a Lealia! ¿En qué podemos ayudarte hoy?\n\n" +
-      "1️⃣ Olvidé Usuario o Contraseña\n" +
-      "2️⃣ Problemas con mi pedido\n" +
-      "3️⃣ Duda de mi carga de puntos\n" +
-      "4️⃣ Problemas con mi portal\n" +
-      "5️⃣ Dirección de entrega\n" +
-      "6️⃣ Consultar Saldo\n" +
-      "7️⃣ Terminar sesión\n\n" +
-      "Por favor, selecciona una opción del menú:",
+    "1️⃣ Olvidé Usuario o Contraseña",
+    "2️⃣ Problemas con mi pedido",
+    "3️⃣ Realizar un pedido especial",
+    "4️⃣ Duda de mi carga de puntos",
+    "5️⃣ Problemas con mi portal",
+    "6️⃣ Dirección de entrega",
+    "7️⃣ Consultar Saldo",
+    "8️⃣ Terminar sesión",
   ],
   ORDER_PROBLEMS: [
     "1️⃣ Llegó dañado",
@@ -84,7 +83,16 @@ export const EMAIL_TEMPLATES = {
     cc: ["acoronel@centiva.mx", "amarrieta@centiva.mx"],
     subject: "Cambio de dirección - Reporte desde WhatsApp",
   },
+  SPECIAL_ORDER: {
+    to: "pedidos@lealia.com.mx",
+    subject: "Consulta sobre pedido especial - WhatsApp Bot",
+  },
 }
 
-// Portal URL
-export const PORTAL_URL = "https://programaganadores.com.mx/"
+// Portal URLs
+export const PORTAL_URLS = {
+  MAIN: "https://tienda.lealia.com.mx/",
+  SPECIAL_ORDERS: "https://tienda.lealia.com.mx/pedidos-especiales",
+  LOGIN: "https://tienda.lealia.com.mx/login",
+  BALANCE: "https://tienda.lealia.com.mx/mi-cuenta/saldo",
+}
