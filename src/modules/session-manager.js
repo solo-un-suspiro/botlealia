@@ -13,14 +13,15 @@ export class SessionManager {
     this.dbKeepAliveTimer = null
     this.dbKeepAliveInterval = 30000
     this.lastQueryTime = Date.now()
-    this.queryTimeout = 15000 // Aumentado a 15 segundos
+    this.queryTimeout = 15000
     this.reconnectInProgress = false
-    this.messageProcessingLock = new Map() // Prevenir procesamiento concurrente
+    this.messageProcessingLock = new Map()
+    this.isShuttingDown = false // Nueva bandera para evitar operaciones durante el cierre
   }
 
   async initializeDbConnection() {
-    if (this.reconnectInProgress) {
-      console.log("Reconexión ya en progreso, esperando...")
+    if (this.reconnectInProgress || this.isShuttingDown) {
+      console.log("Reconexión ya en progreso o sistema cerrándose, esperando...")
       return false
     }
 
@@ -37,23 +38,23 @@ export class SessionManager {
         this.pool = null
       }
 
-      // Configuración más robusta del pool
+      // Configuración corregida del pool (sin opciones inválidas)
       this.pool = mysql.createPool({
-        ...this.dbConfig,
+        host: this.dbConfig.host,
+        user: this.dbConfig.user,
+        password: this.dbConfig.password,
+        database: this.dbConfig.database,
         waitForConnections: true,
-        connectionLimit: 3, // Reducido para evitar sobrecarga
+        connectionLimit: 3,
         queueLimit: 0,
         enableKeepAlive: true,
         keepAliveInitialDelay: 10000,
         namedPlaceholders: true,
         connectTimeout: 30000,
-        acquireTimeout: 30000,
-        timeout: 30000,
-        socketPath: undefined,
         charset: "utf8mb4",
-        reconnect: true,
         idleTimeout: 300000, // 5 minutos
         maxIdle: 2,
+        // Removidas las opciones inválidas: acquireTimeout, timeout, reconnect
       })
 
       // Test de conexión con timeout
@@ -94,10 +95,22 @@ export class SessionManager {
     }
 
     this.dbKeepAliveTimer = setInterval(async () => {
+      // No hacer ping si estamos cerrando
+      if (this.isShuttingDown) {
+        return
+      }
+
       try {
         const timeSinceLastQuery = Date.now() - this.lastQueryTime
         if (timeSinceLastQuery > this.dbKeepAliveInterval) {
           console.log("🏓 Ejecutando ping para mantener la conexión activa...")
+
+          // Verificar que el pool existe y no está cerrado
+          if (!this.pool || this.pool._closed) {
+            console.log("⚠️ Pool cerrado, reinicializando...")
+            await this.initializeDbConnection()
+            return
+          }
 
           const pingPromise = this.pool.query("SELECT 1 as ping")
           const timeoutPromise = new Promise((_, reject) =>
@@ -111,8 +124,8 @@ export class SessionManager {
       } catch (error) {
         console.error("❌ Error en el ping de keep-alive:", error.message)
 
-        // Intentar reinicializar solo si no hay una reconexión en progreso
-        if (!this.reconnectInProgress) {
+        // Solo intentar reinicializar si no estamos cerrando y no hay una reconexión en progreso
+        if (!this.reconnectInProgress && !this.isShuttingDown) {
           console.log("🔄 Intentando reinicializar la conexión...")
           await this.initializeDbConnection()
         }
@@ -121,7 +134,11 @@ export class SessionManager {
   }
 
   async ensureConnection() {
-    if (!this.pool || !this.isDbInitialized || this.reconnectInProgress) {
+    if (this.isShuttingDown) {
+      return false
+    }
+
+    if (!this.pool || !this.isDbInitialized || this.reconnectInProgress || this.pool._closed) {
       return await this.initializeDbConnection()
     }
 
@@ -139,7 +156,11 @@ export class SessionManager {
   }
 
   async executeQuery(query, values, retryCount = 0) {
-    const maxQueryRetries = 2 // Reducido para evitar loops largos
+    if (this.isShuttingDown) {
+      throw new Error("Sistema cerrándose, no se pueden ejecutar consultas")
+    }
+
+    const maxQueryRetries = 2
 
     const connected = await this.ensureConnection()
     if (!connected) {
@@ -159,7 +180,7 @@ export class SessionManager {
     } catch (error) {
       console.error(`❌ Error ejecutando la consulta (intento ${retryCount + 1}):`, error.message)
 
-      if (retryCount < maxQueryRetries) {
+      if (retryCount < maxQueryRetries && !this.isShuttingDown) {
         console.log(`🔄 Reintentando consulta en 2 segundos...`)
         await new Promise((resolve) => setTimeout(resolve, 2000))
 
@@ -167,7 +188,8 @@ export class SessionManager {
           error.code === "PROTOCOL_CONNECTION_LOST" ||
           error.code === "ECONNRESET" ||
           error.code === "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR" ||
-          error.message.includes("timeout")
+          error.message.includes("timeout") ||
+          error.message.includes("Pool is closed")
         ) {
           await this.initializeDbConnection()
         }
@@ -179,7 +201,6 @@ export class SessionManager {
     }
   }
 
-  // Método para prevenir procesamiento concurrente de mensajes
   async lockMessageProcessing(chatId) {
     if (this.messageProcessingLock.has(chatId)) {
       console.log(`⏳ Mensaje ya siendo procesado para ${chatId}, ignorando...`)
@@ -203,6 +224,11 @@ export class SessionManager {
   }
 
   async saveSessionToDatabase(session) {
+    if (this.isShuttingDown) {
+      console.log("Sistema cerrándose, no se puede guardar la sesión")
+      return
+    }
+
     try {
       const duration = Math.floor((Date.now() - session.startTime) / 1000)
       const query = `
@@ -219,7 +245,7 @@ export class SessionManager {
         new Date(session.startTime).toISOString().slice(0, 19).replace("T", " "),
         duration,
         session.reportId,
-        JSON.stringify(session.conversationHistory.slice(-50)), // Limitar historial
+        JSON.stringify(session.conversationHistory.slice(-50)),
         JSON.stringify(session.surveyResponses),
       ]
 
@@ -244,7 +270,11 @@ export class SessionManager {
           session.warningTimer = null
         }
 
-        await this.saveSessionToDatabase(session)
+        // Solo guardar en DB si no estamos cerrando
+        if (!this.isShuttingDown) {
+          await this.saveSessionToDatabase(session)
+        }
+
         this.sessions.delete(chatId)
         this.unlockMessageProcessing(chatId)
 
@@ -256,6 +286,9 @@ export class SessionManager {
   }
 
   async closeConnection() {
+    console.log("🧹 Iniciando cierre del session manager...")
+    this.isShuttingDown = true
+
     try {
       if (this.dbKeepAliveTimer) {
         clearInterval(this.dbKeepAliveTimer)
@@ -270,7 +303,7 @@ export class SessionManager {
       this.sessions.clear()
       this.messageProcessingLock.clear()
 
-      if (this.pool) {
+      if (this.pool && !this.pool._closed) {
         await this.pool.end()
         console.log("✅ Conexión a la base de datos cerrada correctamente")
       }

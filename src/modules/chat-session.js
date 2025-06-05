@@ -50,6 +50,10 @@ export class ChatSession {
     this.conversationId = null
     this.isAbandoned = false
     this.abandonedAt = null
+
+    // Callbacks para el temporizador - SIEMPRE DEFINIDOS
+    this.warningCallback = null
+    this.endCallback = null
   }
 
   updateLastActivity() {
@@ -77,13 +81,13 @@ export class ChatSession {
       return
     }
 
-    console.log(`[TIMER] Resetting inactivity timer for user ${this.chatId}`)
-    this.inactivityTimer = setTimeout(
-      () => {
-        this.handleInactivity()
-      },
-      2 * 60 * 1000,
-    ) // 2 minutos
+    // Solo resetear si tenemos callbacks configurados
+    if (this.warningCallback && this.endCallback) {
+      console.log(`[TIMER] Resetting inactivity timer with callbacks for user ${this.chatId}`)
+      this.startInactivityTimer(this.warningCallback, this.endCallback)
+    } else {
+      console.log(`[TIMER] No callbacks configured for user ${this.chatId}, skipping timer reset`)
+    }
   }
 
   clearAllTimers() {
@@ -97,6 +101,7 @@ export class ChatSession {
     }
   }
 
+  // Método simplificado - ya no se usa para el flujo principal
   handleInactivity() {
     if (this.isTransferred || this.isTimerPaused) {
       console.log(
@@ -105,7 +110,7 @@ export class ChatSession {
       return
     }
 
-    console.log(`[INACTIVITY] Marking user ${this.chatId} as inactive`)
+    console.log(`[INACTIVITY] Marking user ${this.chatId} as inactive (legacy method)`)
     this.isInactive = true
     this.currentFlow = "inactivity_check"
   }
@@ -132,43 +137,53 @@ export class ChatSession {
       return
     }
 
-    console.log(`[TIMER] Starting inactivity timer for user ${this.chatId}`)
+    // Guardar los callbacks para uso posterior
+    this.warningCallback = warningCallback
+    this.endCallback = endCallback
+
+    console.log(`[TIMER] Starting inactivity timer for user ${this.chatId} (2 minutes)`)
 
     this.inactivityTimer = setTimeout(
       async () => {
-        if (!this.hasWarned && !this.isTransferred && !this.isTimerPaused) {
-          console.log(`[TIMER] Inactivity warning triggered for user ${this.chatId}`)
+        if (!this.isTransferred && !this.isTimerPaused) {
+          console.log(`[TIMER] 🚨 INACTIVITY TIMEOUT TRIGGERED for user ${this.chatId}`)
           try {
+            // Ejecutar callback de warning directamente
+            console.log(`[TIMER] 📤 Executing warning callback...`)
             await warningCallback()
-            this.hasWarned = true
-            this.currentFlow = "inactivity_check"
-            this.currentStep = "awaiting_response"
+            console.log(`[TIMER] ✅ Warning callback executed successfully`)
 
-            // Timer para auto-terminación
+            // Marcar como abandonada
+            this.markAsAbandoned()
+
+            // Configurar timer para auto-terminación después del mensaje de abandono
+            console.log(`[TIMER] ⏰ Setting end timer (1 minute)...`)
             this.warningTimer = setTimeout(
               async () => {
                 if (!this.isTransferred && !this.isTimerPaused) {
-                  console.log(`[TIMER] Auto-terminating session for user ${this.chatId} due to continued inactivity`)
-
-                  // Marcar como abandonada antes de terminar
-                  this.markAsAbandoned()
-
+                  console.log(`[TIMER] 🔚 END TIMEOUT TRIGGERED for user ${this.chatId}`)
                   try {
+                    console.log(`[TIMER] 📤 Executing end callback...`)
                     await endCallback()
+                    console.log(`[TIMER] ✅ End callback executed successfully`)
                   } catch (error) {
-                    console.error(`[TIMER] Error in end callback:`, error)
+                    console.error(`[TIMER] ❌ Error in end callback:`, error)
                   }
                 }
               },
-              2 * 60 * 1000,
-            ) // 2 minutos después del warning
+              1 * 60 * 1000, // 1 minuto después del mensaje de abandono
+            )
           } catch (error) {
-            console.error(`[TIMER] Error in warning callback:`, error)
+            console.error(`[TIMER] ❌ Error in warning callback:`, error)
           }
+        } else {
+          console.log(`[TIMER] ⏭️ Skipping timeout - transferred: ${this.isTransferred}, paused: ${this.isTimerPaused}`)
         }
       },
-      2 * 60 * 1000,
-    ) // 2 minutos para warning inicial
+      2 * 60 * 1000, // 2 minutos para el mensaje de abandono
+    )
+
+    console.log(`[TIMER] ✅ Inactivity timer set successfully for user ${this.chatId}`)
   }
 
   pauseInactivityTimer() {
@@ -181,6 +196,11 @@ export class ChatSession {
     console.log(`[TIMER] Resuming inactivity timer for user ${this.chatId}`)
     this.isTimerPaused = false
     this.hasWarned = false
+
+    // Actualizar los callbacks
+    this.warningCallback = warningCallback
+    this.endCallback = endCallback
+
     this.startInactivityTimer(warningCallback, endCallback)
   }
 
@@ -268,6 +288,8 @@ export class ChatSession {
     this.hasWarned = false
     this.isAbandoned = false
     this.abandonedAt = null
+    this.warningCallback = null
+    this.endCallback = null
   }
 
   // Método para verificar si la sesión está en un estado válido

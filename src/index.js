@@ -10,6 +10,7 @@ import { closeReportDbConnection } from "./modules/report-service.js"
 import { USER_DB_CONFIG } from "./config/constants.js"
 import { checkEnvVariables } from "./utils/env-checker.js"
 import { messageTracker } from "./utils/message-tracker.js"
+import { ConversationLogger } from "./modules/conversation-logger.js"
 
 // Load environment variables
 dotenv.config()
@@ -31,6 +32,9 @@ const msgRetryCache = new NodeCache()
 const sessionManager = new SessionManager(USER_DB_CONFIG)
 const surveyManager = new SurveyManager()
 
+// INSTANCIA GLOBAL DEL CONVERSATION LOGGER
+let globalConversationLogger = null
+
 // Variables para control de reconexión
 let reconnectAttempts = 0
 const maxReconnectAttempts = 10
@@ -38,8 +42,7 @@ let isConnecting = false
 
 // Initialize baileys authentication state outside the connectToWhatsApp function
 const authState = await useMultiFileAuthState("auth_info_baileys")
-const state = authState.state
-const saveCreds = authState.saveCreds
+const { state, saveCreds } = authState
 
 async function connectToWhatsApp() {
   if (isConnecting) {
@@ -73,6 +76,10 @@ async function connectToWhatsApp() {
       const connected = await sessionManager.initializeDbConnection()
       if (connected) {
         console.log("✅ Conexión a la base de datos establecida correctamente")
+
+        // INICIALIZAR EL CONVERSATION LOGGER GLOBAL
+        globalConversationLogger = new ConversationLogger(sessionManager)
+        console.log("✅ ConversationLogger global inicializado")
       } else {
         console.warn(
           "⚠️ No se pudo establecer la conexión a la base de datos. El bot funcionará con funcionalidad limitada.",
@@ -205,7 +212,7 @@ async function connectToWhatsApp() {
   }
 }
 
-// Función mejorada para enviar mensajes
+// Función mejorada para enviar mensajes CON LOGGING AUTOMÁTICO
 export async function sendMessage(sock, chatId, text) {
   try {
     const maxLength = 2000
@@ -244,6 +251,9 @@ export async function sendMessage(sock, chatId, text) {
 
         console.log(`📤 Mensaje enviado a ${chatId}: ${chunk.substring(0, 50)}...`)
 
+        // LOGGING AUTOMÁTICO DEL MENSAJE DEL BOT - SOLO UNA VEZ
+        await logBotMessage(chatId, chunk)
+
         // Pequeño delay entre chunks para evitar spam
         if (i < chunks.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 500))
@@ -257,6 +267,42 @@ export async function sendMessage(sock, chatId, text) {
     console.error("❌ Error en sendMessage:", error)
     throw error
   }
+}
+
+// FUNCIÓN PARA LOGGING AUTOMÁTICO DE MENSAJES DEL BOT
+async function logBotMessage(chatId, messageContent) {
+  try {
+    if (!globalConversationLogger) {
+      console.log(`[AUTO_LOG_BOT] ConversationLogger no disponible`)
+      return
+    }
+
+    // Obtener la sesión para conseguir el conversationId
+    const session = sessionManager.getSession(chatId)
+
+    // Si no hay conversationId, crear uno nuevo
+    if (!session.conversationId) {
+      session.conversationId = await globalConversationLogger.startConversation(chatId)
+      console.log(`[AUTO_LOG_BOT] Nueva conversación creada: ${session.conversationId}`)
+    }
+
+    // Registrar el mensaje del bot
+    await globalConversationLogger.logMessage(session.conversationId, chatId, "bot", messageContent, session.chatId)
+
+    console.log(`[AUTO_LOG_BOT] ✅ Mensaje del bot registrado: "${messageContent.substring(0, 50)}..."`)
+  } catch (error) {
+    console.error(`[AUTO_LOG_BOT] ❌ Error en logging automático del bot:`, error)
+  }
+}
+
+// FUNCIÓN PARA OBTENER EL CONVERSATION LOGGER GLOBAL
+export function getGlobalConversationLogger() {
+  return globalConversationLogger
+}
+
+// FUNCIÓN PARA OBTENER EL SESSION MANAGER GLOBAL
+export function getGlobalSessionManager() {
+  return sessionManager
 }
 
 // Función de limpieza mejorada

@@ -149,22 +149,22 @@ export async function handleOrderProblems(sock, chatId, option, session) {
 export async function handleCoinIssues(sock, chatId, option, session) {
   console.log(`[COINS] User selected coin issue option: ${option}`)
   switch (option) {
-    case "1": // Los puntos que tengo no coinciden
+    case "1": // Las monedas que tengo no coinciden
       console.log(`[COINS] User ${chatId} reporting coin discrepancy`)
       await sendMessage(
         sock,
         chatId,
-        "En seguida te compartimos las reglas. En caso de que continúes con dudas sobre tu carga, debes enviar un correo a *mescobar@centiva.mx* solicitando la aclaración de tus puntos. Por favor.\n\n¿Hay algo más en lo que te podamos ayudar?\n\n" +
+        "En seguida te compartimos las reglas. En caso de que continúes con dudas sobre tu carga, debes enviar un correo a *mescobar@centiva.mx* solicitando la aclaración de tus monedas. Por favor.\n\n¿Hay algo más en lo que te podamos ayudar?\n\n" +
           MENU_OPTIONS.CLOSING_MENU.join("\n"),
       )
       session.setMenuState("CLOSING_MENU")
       break
-    case "2": // No tengo puntos correspondientes al mes
-      console.log(`[COINS] User ${chatId} reporting missing monthly points`)
+    case "2": // No tengo monedas correspondientes al mes
+      console.log(`[COINS] User ${chatId} reporting missing monthly coins`)
       await sendMessage(
         sock,
         chatId,
-        "Buen día, de momento nos encontramos en espera de que corporativo nos indique la dispersión mensual para la carga de puntos. En cuanto sean cargadas a tu portal con gusto te notificamos por este medio. Por favor.",
+        "Buen día, de momento nos encontramos en espera de que corporativo nos indique la dispersión mensual para la carga de monedas. En cuanto sean cargadas a tu portal con gusto te notificamos por este medio. Por favor.",
       )
       await showClosingMenu(sock, chatId, session)
       break
@@ -614,7 +614,7 @@ async function processBalanceCheck(sock, chatId, session) {
         await sendMessage(
           sock,
           chatId,
-          `💰 Tu saldo actual en Lealia es: ${balance.toLocaleString()} puntos\n\n¿Deseas realizar alguna otra consulta?`,
+          `💰 Tu saldo actual en Lealia es: $${balance.toLocaleString()} puntos\n\n¿Deseas realizar alguna otra consulta?`,
         )
         await showClosingMenu(sock, chatId, session)
       } else {
@@ -706,6 +706,7 @@ async function getUserBalance(userIdApi, tokenApi) {
   }
 }
 
+// Función simplificada - ya no necesita parámetros adicionales
 export async function showMainMenu(sock, chatId, session) {
   console.log(`[MENU] Showing main menu to user ${chatId}`)
   await sendMessage(
@@ -724,6 +725,28 @@ export async function showMainMenu(sock, chatId, session) {
   )
   session.setMenuState("MAIN_MENU")
   session.resetMenuState()
+
+  // Configurar temporizador de inactividad para el menú principal
+  console.log(`[MENU] 🔧 Setting up inactivity timer for main menu`)
+
+  const warningCallback = async () => {
+    console.log(`[MENU_INACTIVITY] ⚠️ User ${chatId} inactive in main menu`)
+    const abandonMsg =
+      "Creo que has abandonado el chat ☹️, esta conversación se cerrará por inactividad.\n\nSi deseas continuar con el seguimiento vuelve a contactar por favor."
+
+    await sendMessage(sock, chatId, abandonMsg)
+    console.log(`[MENU_INACTIVITY] ✅ Abandon message sent and automatically logged`)
+
+    session.markAsAbandoned()
+  }
+
+  const endCallback = async () => {
+    console.log(`[MENU_INACTIVITY] 🔚 Ending session for inactive user ${chatId}`)
+    // No enviar mensaje adicional, ya se envió el de abandono
+  }
+
+  session.startInactivityTimer(warningCallback, endCallback)
+  console.log(`[MENU] ✅ Inactivity timer configured for main menu`)
 }
 
 export async function initiateHumanSupport(sock, chatId, session) {

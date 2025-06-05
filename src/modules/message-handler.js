@@ -1,11 +1,10 @@
-import { sendMessage } from "../index.js"
+import { sendMessage, getGlobalConversationLogger } from "../index.js"
 import { getGeminiResponse, getFallbackResponse } from "./ai-service.js"
 import { createReport } from "./report-service.js"
 import { withDatabaseFallback } from "../utils/database-utils.js"
 import { showMainMenu, handleMenuInput } from "./menu-handler.js"
 import { BusinessHours } from "../utils/business-hours.js"
 import { messageTracker } from "../utils/message-tracker.js"
-import { ConversationLogger } from "./conversation-logger.js"
 
 const businessHours = new BusinessHours()
 
@@ -24,9 +23,6 @@ const END_HUMAN_SUPPORT_PHRASES = [
   "finalizar atencion humana",
   "finalizar atención humana",
 ]
-
-// Instancia global del logger de conversaciones
-let conversationLogger = null
 
 function isDuplicateMessage(chatId, messageContent) {
   const key = `${chatId}:${messageContent}`
@@ -62,22 +58,12 @@ async function handleSurvey(sock, chatId, messageContent, session, surveyManager
   console.log(`[SURVEY] Processing survey response: ${messageContent} for question ${session.currentSurveyQuestion}`)
 
   try {
-    // Log del mensaje del usuario en la encuesta
-    if (conversationLogger && session.conversationId) {
-      await conversationLogger.logMessage(session.conversationId, chatId, "user", messageContent, session.chatId)
-    }
-
     // Verificar que surveyManager está disponible
     if (!surveyManager || typeof surveyManager.getTotalQuestions !== "function") {
       console.error(`[SURVEY] Survey manager not available or missing getTotalQuestions method`)
       const errorMsg =
         "Lo sentimos, hay un problema técnico con nuestra encuesta. Tu mensaje ha sido registrado. ¡Gracias por contactarnos!"
       await sendMessage(sock, chatId, errorMsg)
-
-      // Log del mensaje del bot
-      if (conversationLogger && session.conversationId) {
-        await conversationLogger.logMessage(session.conversationId, chatId, "bot", errorMsg, session.chatId)
-      }
 
       session.isSurveyActive = false
       return true
@@ -101,11 +87,6 @@ async function handleSurvey(sock, chatId, messageContent, session, surveyManager
           console.log(`[SURVEY] Sending next question: ${nextQuestion}`)
           const questionMsg = `📊 ${nextQuestion}\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.`
           await sendMessage(sock, chatId, questionMsg)
-
-          // Log del mensaje del bot
-          if (conversationLogger && session.conversationId) {
-            await conversationLogger.logMessage(session.conversationId, chatId, "bot", questionMsg, session.chatId)
-          }
         } else {
           // Encuesta completada
           console.log(`[SURVEY] Survey completed, responses:`, session.surveyResponses)
@@ -113,10 +94,9 @@ async function handleSurvey(sock, chatId, messageContent, session, surveyManager
             "🎉 ¡Gracias por completar nuestra encuesta! Tus respuestas son muy valiosas para mejorar el servicio de Lealia. ¡Que tengas un excelente día! 🌟"
           await sendMessage(sock, chatId, completionMsg)
 
-          // Log del mensaje del bot
+          // Finalizar conversación con encuesta completada
+          const conversationLogger = getGlobalConversationLogger()
           if (conversationLogger && session.conversationId) {
-            await conversationLogger.logMessage(session.conversationId, chatId, "bot", completionMsg, session.chatId)
-            // Finalizar conversación con encuesta completada
             await conversationLogger.endConversation(
               session.conversationId,
               "user",
@@ -142,11 +122,6 @@ async function handleSurvey(sock, chatId, messageContent, session, surveyManager
         const currentQuestion = surveyManager.getQuestion(session.currentSurveyQuestion)
         const invalidMsg = `⚠️ Por favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho.\n\n📊 ${currentQuestion}`
         await sendMessage(sock, chatId, invalidMsg)
-
-        // Log del mensaje del bot
-        if (conversationLogger && session.conversationId) {
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", invalidMsg, session.chatId)
-        }
       }
       return true
     } else {
@@ -160,12 +135,6 @@ async function handleSurvey(sock, chatId, messageContent, session, surveyManager
     const errorMsg =
       "Lo sentimos, ha ocurrido un error al procesar tu respuesta. Por favor, intenta de nuevo más tarde."
     await sendMessage(sock, chatId, errorMsg)
-
-    // Log del mensaje del bot
-    if (conversationLogger && session.conversationId) {
-      await conversationLogger.logMessage(session.conversationId, chatId, "bot", errorMsg, session.chatId)
-    }
-
     return true
   }
 }
@@ -182,22 +151,18 @@ async function startSatisfactionSurvey(sock, chatId, session, surveyManager, ses
     // Reanudar el temporizador de inactividad
     session.resumeInactivityTimer(
       async () => {
-        const warningMsg = "¿Sigues ahí? Estoy aquí para ayudarte si tienes más preguntas."
-        await sendMessage(sock, chatId, warningMsg)
+        // Primer aviso - mensaje de abandono directo
+        const abandonMsg =
+          "Creo que has abandonado el chat ☹️, esta conversación se cerrará por inactividad.\n\nSi deseas continuar con el seguimiento vuelve a contactar por favor."
+        await sendMessage(sock, chatId, abandonMsg)
 
-        // Log del mensaje del bot
-        if (conversationLogger && session.conversationId) {
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", warningMsg, session.chatId)
-        }
+        // Marcar como abandonada
+        session.markAsAbandoned()
       },
       async () => {
-        const endMsg =
-          "Creo que has abandonado el chat ☹️, esta conversación se cerrará por inactividad.\n\nSi deseas continuar con el seguimiento vuelve a contactar por favor."
-        await sendMessage(sock, chatId, endMsg)
-
-        // Log del mensaje del bot y finalizar conversación
+        // Finalizar conversación sin mensaje adicional
+        const conversationLogger = getGlobalConversationLogger()
         if (conversationLogger && session.conversationId) {
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", endMsg, session.chatId)
           await conversationLogger.endConversation(
             session.conversationId,
             "inactivity",
@@ -223,11 +188,6 @@ async function startSatisfactionSurvey(sock, chatId, session, surveyManager, ses
 
     await sendMessage(sock, chatId, firstQuestionMsg)
 
-    // Log del mensaje del bot
-    if (conversationLogger && session.conversationId) {
-      await conversationLogger.logMessage(session.conversationId, chatId, "bot", firstQuestionMsg, session.chatId)
-    }
-
     console.log(`[SURVEY] Survey started successfully for user ${chatId}`)
     return true
   } catch (error) {
@@ -235,12 +195,6 @@ async function startSatisfactionSurvey(sock, chatId, session, surveyManager, ses
     const fallbackMsg =
       "📊 ¿Cómo calificarías la atención recibida?\n\nPor favor, responde con un número del 1 al 9, donde 1 es muy insatisfecho y 9 es muy satisfecho."
     await sendMessage(sock, chatId, fallbackMsg)
-
-    // Log del mensaje del bot
-    if (conversationLogger && session.conversationId) {
-      await conversationLogger.logMessage(session.conversationId, chatId, "bot", fallbackMsg, session.chatId)
-    }
-
     return false
   }
 }
@@ -249,10 +203,9 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
   try {
     console.log(`[MESSAGE] Handling message from ${chatId}: ${messageContent}`)
 
-    // Inicializar el logger de conversaciones si no existe
-    if (!conversationLogger) {
-      conversationLogger = new ConversationLogger(sessionManager)
-    }
+    // IMPORTANTE: Registrar el mensaje del usuario SOLO UNA VEZ al inicio
+    // Obtener el conversationLogger global
+    const conversationLogger = getGlobalConversationLogger()
 
     // Registrar el origen del mensaje usando nuestro sistema personalizado
     const messageId = msg.key?.id
@@ -277,8 +230,8 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       // Obtener o crear la sesión
       const session = sessionManager.getSession(chatId)
 
-      // Log del mensaje del usuario
-      if (session.conversationId) {
+      // Registrar el mensaje del usuario si tenemos conversationLogger y conversationId
+      if (conversationLogger && session.conversationId) {
         await conversationLogger.logMessage(session.conversationId, chatId, "user", messageContent, session.chatId)
       }
 
@@ -311,7 +264,9 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
 
         // Registrar mensaje fuera de horario
         const phoneNumber = chatId.split("@")[0]
-        await conversationLogger.logOutOfHoursMessage(phoneNumber, messageContent)
+        if (conversationLogger) {
+          await conversationLogger.logOutOfHoursMessage(phoneNumber, messageContent)
+        }
 
         const outOfHoursMsg = businessHours.getOutOfHoursMessage()
         await sendMessage(sock, chatId, outOfHoursMsg)
@@ -323,22 +278,22 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       const messageText = messageContent.toLowerCase()
 
       // Inicializar conversación si es nueva
-      if (!session.conversationId) {
+      if (!session.conversationId && conversationLogger) {
         session.conversationId = await conversationLogger.startConversation(chatId)
         console.log(`[CONV_LOG] Started new conversation: ${session.conversationId}`)
       }
 
-      // Log del mensaje del usuario
-      await conversationLogger.logMessage(session.conversationId, chatId, "user", messageContent, session.chatId)
+      // REGISTRAR EL MENSAJE DEL USUARIO AQUÍ - SOLO UNA VEZ
+      if (conversationLogger && session.conversationId) {
+        await conversationLogger.logMessage(session.conversationId, chatId, "user", messageContent, session.chatId)
+        console.log(`[CONV_LOG] User message logged: "${messageContent.substring(0, 50)}..."`)
+      }
 
       // Verificar si la sesión fue abandonada y el usuario vuelve
       if (session.wasAbandoned()) {
         console.log(`[SESSION] User ${chatId} returned after abandoning the chat`)
         const returnMsg = "¡Hola de nuevo! Veo que has vuelto. ¿En qué puedo ayudarte?"
         await sendMessage(sock, chatId, returnMsg)
-
-        // Log del mensaje del bot
-        await conversationLogger.logMessage(session.conversationId, chatId, "bot", returnMsg, session.chatId)
 
         // Resetear el estado de abandono y mostrar menú principal
         session.isAbandoned = false
@@ -374,14 +329,15 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
             "👋 ¡Gracias por contactar a Lealia! Si necesitas algo más en el futuro, estaremos aquí para ayudarte. ¡Que tengas un excelente día! 😊"
           await sendMessage(sock, chatId, endMsg)
 
-          // Log del mensaje del bot y finalizar conversación
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", endMsg, session.chatId)
-          await conversationLogger.endConversation(
-            session.conversationId,
-            "user",
-            false,
-            session.isWaitingForHumanResponse,
-          )
+          // Finalizar conversación
+          if (conversationLogger && session.conversationId) {
+            await conversationLogger.endConversation(
+              session.conversationId,
+              "user",
+              false,
+              session.isWaitingForHumanResponse,
+            )
+          }
 
           await sessionManager.endSession(chatId)
           return
@@ -389,9 +345,6 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
           console.log(`[INACTIVITY] Invalid response from user ${chatId}: ${messageText}`)
           const invalidMsg = "Por favor, responde con:\n1️⃣ Sí, continuar\n2️⃣ No, terminar conversación"
           await sendMessage(sock, chatId, invalidMsg)
-
-          // Log del mensaje del bot
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", invalidMsg, session.chatId)
           return
         }
       }
@@ -403,9 +356,6 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
         const inactivityMsg =
           "⏰ Hemos notado que has estado inactivo. ¿Deseas continuar con la conversación?\n\n1️⃣ Sí, continuar con Lealia\n2️⃣ No, terminar conversación"
         await sendMessage(sock, chatId, inactivityMsg)
-
-        // Log del mensaje del bot
-        await conversationLogger.logMessage(session.conversationId, chatId, "bot", inactivityMsg, session.chatId)
 
         session.currentFlow = "inactivity_check"
         session.currentStep = "awaiting_response"
@@ -485,9 +435,6 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
 
           const promptMsg = fieldPrompts[session.currentField] || `Por favor, proporciona tu ${session.currentField}:`
           await sendMessage(sock, chatId, promptMsg)
-
-          // Log del mensaje del bot
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", promptMsg, session.chatId)
         } else {
           // Todos los campos recolectados, crear el reporte
           console.log(`[REPORT] All fields collected, creating report`)
@@ -507,9 +454,6 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
               "✅ Gracias por proporcionar la información. Te transferiremos con un agente especializado de Lealia para resolver tu problema de forma personalizada."
             await sendMessage(sock, chatId, transferMsg)
 
-            // Log del mensaje del bot
-            await conversationLogger.logMessage(session.conversationId, chatId, "bot", transferMsg, session.chatId)
-
             session.isCollectingReportData = false
             session.reportData = {}
             session.currentField = ""
@@ -521,9 +465,6 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
             const errorMsg =
               "Lo siento, hubo un error al crear el reporte. Por favor, intenta de nuevo o contacta directamente con nuestro servicio al cliente."
             await sendMessage(sock, chatId, errorMsg)
-
-            // Log del mensaje del bot
-            await conversationLogger.logMessage(session.conversationId, chatId, "bot", errorMsg, session.chatId)
 
             session.isCollectingReportData = false
             session.reportData = {}
@@ -571,45 +512,53 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
         session.currentField = "name"
         const reportMsg = `Entiendo que necesitas ayuda adicional para resolver tu problema. Voy a crear un reporte para que un agente de soporte te contacte y pueda ayudarte de manera más personalizada. Por favor, proporciona la siguiente información:\n\nPrimero, ¿cuál es tu nombre completo?`
         await sendMessage(sock, chatId, reportMsg)
-
-        // Log del mensaje del bot
-        await conversationLogger.logMessage(session.conversationId, chatId, "bot", reportMsg, session.chatId)
       } else {
         await sendMessage(sock, chatId, response)
-
-        // Log del mensaje del bot
-        await conversationLogger.logMessage(session.conversationId, chatId, "bot", response, session.chatId)
       }
 
       // Iniciar el temporizador de inactividad después de procesar el mensaje
-      console.log(`[ACTIVITY] Starting inactivity timer for user ${chatId}`)
-      session.startInactivityTimer(
-        async () => {
-          console.log(`[INACTIVITY] Warning user ${chatId} about inactivity`)
-          const warningMsg = "¿Sigues ahí? Estoy aquí para ayudarte si tienes más preguntas."
-          await sendMessage(sock, chatId, warningMsg)
+      console.log(`[ACTIVITY] 🚀 Starting inactivity timer for user ${chatId}`)
 
-          // Log del mensaje del bot
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", warningMsg, session.chatId)
-        },
-        async () => {
-          console.log(`[INACTIVITY] Ending session for inactive user ${chatId}`)
+      // Definir callbacks como funciones separadas para mejor debugging
+      const warningCallback = async () => {
+        console.log(`[INACTIVITY] ⚠️ EXECUTING WARNING CALLBACK for user ${chatId}`)
+        try {
+          // Primer aviso - mensaje de abandono directo
           const abandonMsg =
             "Creo que has abandonado el chat ☹️, esta conversación se cerrará por inactividad.\n\nSi deseas continuar con el seguimiento vuelve a contactar por favor."
+
+          console.log(`[INACTIVITY] 📤 Sending abandon message to ${chatId}`)
           await sendMessage(sock, chatId, abandonMsg)
 
-          // Log del mensaje del bot y finalizar conversación
-          await conversationLogger.logMessage(session.conversationId, chatId, "bot", abandonMsg, session.chatId)
-          await conversationLogger.endConversation(
-            session.conversationId,
-            "inactivity",
-            false,
-            session.isWaitingForHumanResponse,
-          )
+          console.log(`[INACTIVITY] ✅ Warning callback completed for user ${chatId}`)
+        } catch (error) {
+          console.error(`[INACTIVITY] ❌ Error in warning callback:`, error)
+        }
+      }
+
+      const endCallback = async () => {
+        console.log(`[INACTIVITY] 🔚 EXECUTING END CALLBACK for user ${chatId}`)
+        try {
+          // Finalizar conversación sin mensaje adicional (ya se envió el de abandono)
+          if (conversationLogger && session.conversationId) {
+            await conversationLogger.endConversation(
+              session.conversationId,
+              "inactivity",
+              false,
+              session.isWaitingForHumanResponse,
+            )
+          }
 
           await sessionManager.endSession(chatId)
-        },
-      )
+          console.log(`[INACTIVITY] ✅ End callback completed for user ${chatId}`)
+        } catch (error) {
+          console.error(`[INACTIVITY] ❌ Error in end callback:`, error)
+        }
+      }
+
+      console.log(`[ACTIVITY] 🔧 Configuring inactivity timer with callbacks`)
+      session.startInactivityTimer(warningCallback, endCallback)
+      console.log(`[ACTIVITY] ✅ Inactivity timer configured for user ${chatId}`)
     } finally {
       // Siempre liberar el lock
       sessionManager.unlockMessageProcessing(chatId)
@@ -624,14 +573,9 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       const errorMsg =
         "Lo siento, hubo un error al procesar tu mensaje. Por favor, intenta de nuevo o contacta directamente con nuestro servicio al cliente."
       await sendMessage(sock, chatId, errorMsg)
-
-      // Log del mensaje del bot si es posible
-      const session = sessionManager.getSession(chatId)
-      if (conversationLogger && session.conversationId) {
-        await conversationLogger.logMessage(session.conversationId, chatId, "bot", errorMsg, session.chatId)
-      }
     } catch (sendError) {
       console.error(`[ERROR] Error sending error message:`, sendError)
     }
   }
+  
 }
