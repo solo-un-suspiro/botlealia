@@ -45,12 +45,25 @@ export class ChatSession {
     this.messageCount = 0
     this.lastMessageTime = 0
     this.processingMessage = false
+
+    // Nuevas propiedades para el logging de conversaciones
+    this.conversationId = null
+    this.isAbandoned = false
+    this.abandonedAt = null
   }
 
   updateLastActivity() {
     this.lastActivity = Date.now()
     this.lastMessageTime = Date.now()
     this.messageCount++
+
+    // Si la sesión estaba abandonada, ya no lo está
+    if (this.isAbandoned) {
+      this.isAbandoned = false
+      this.abandonedAt = null
+      console.log(`[SESSION] Session ${this.chatId} is no longer abandoned`)
+    }
+
     this.resetInactivityTimer()
   }
 
@@ -97,6 +110,20 @@ export class ChatSession {
     this.currentFlow = "inactivity_check"
   }
 
+  // Nuevo método para marcar la sesión como abandonada
+  markAsAbandoned() {
+    console.log(`[SESSION] Marking session ${this.chatId} as abandoned`)
+    this.isAbandoned = true
+    this.abandonedAt = Date.now()
+    this.isInactive = true
+    this.currentFlow = "abandoned"
+  }
+
+  // Verificar si la sesión fue abandonada
+  wasAbandoned() {
+    return this.isAbandoned
+  }
+
   startInactivityTimer(warningCallback, endCallback) {
     this.clearAllTimers()
 
@@ -122,6 +149,10 @@ export class ChatSession {
               async () => {
                 if (!this.isTransferred && !this.isTimerPaused) {
                   console.log(`[TIMER] Auto-terminating session for user ${this.chatId} due to continued inactivity`)
+
+                  // Marcar como abandonada antes de terminar
+                  this.markAsAbandoned()
+
                   try {
                     await endCallback()
                   } catch (error) {
@@ -155,9 +186,21 @@ export class ChatSession {
 
   resetSurvey() {
     console.log(`[SURVEY] Resetting survey for user ${this.chatId}`)
+
+    // Inicializar o reiniciar todas las propiedades relacionadas con la encuesta
     this.surveyResponses = []
     this.currentSurveyQuestion = 0
     this.isSurveyActive = true
+
+    // Asegurar que otras propiedades estén correctamente configuradas
+    this.isWaitingForHumanResponse = false
+
+    // Registrar el estado actual para depuración
+    console.log(
+      `[SURVEY] Survey state after reset: active=${this.isSurveyActive}, question=${this.currentSurveyQuestion}, waitingForHuman=${this.isWaitingForHumanResponse}`,
+    )
+
+    return true
   }
 
   isValidSurveyResponse(response) {
@@ -223,6 +266,8 @@ export class ChatSession {
     this.isTransferred = false
     this.isTimerPaused = false
     this.hasWarned = false
+    this.isAbandoned = false
+    this.abandonedAt = null
   }
 
   // Método para verificar si la sesión está en un estado válido
