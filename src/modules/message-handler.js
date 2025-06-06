@@ -12,6 +12,16 @@ const businessHours = new BusinessHours()
 const messageCache = new Map()
 const CACHE_DURATION = 5000 // 5 segundos
 
+// Lista de frases que indican INICIO de atención humana
+const START_HUMAN_SUPPORT_PHRASES = [
+  "hola me comunico de lealia",
+  "hola me comunico desde lealia",
+  "hola soy de lealia",
+  "hola, me comunico de lealia",
+  "hola, me comunico desde lealia",
+  "hola, soy de lealia",
+]
+
 // Lista de frases que indican fin de atención humana
 const END_HUMAN_SUPPORT_PHRASES = [
   "fin de la atención humana. iniciando encuesta de satisfacción.",
@@ -46,6 +56,12 @@ function isDuplicateMessage(chatId, messageContent) {
   }
 
   return false
+}
+
+// Función para verificar si un mensaje es de INICIO de atención humana
+function isStartHumanSupportMessage(messageContent) {
+  const lowerMessage = messageContent.trim().toLowerCase()
+  return START_HUMAN_SUPPORT_PHRASES.some((phrase) => lowerMessage.includes(phrase))
 }
 
 // Función para verificar si un mensaje es de fin de atención humana
@@ -199,6 +215,29 @@ async function startSatisfactionSurvey(sock, chatId, session, surveyManager, ses
   }
 }
 
+// Función para iniciar atención humana desde contact center
+async function startHumanSupportFromAgent(sock, chatId, session, messageContent) {
+  console.log(`[HUMAN_AGENT] Contact center agent initiated conversation: "${messageContent}"`)
+
+  // Marcar la sesión como transferida a humano
+  session.isWaitingForHumanResponse = true
+  session.isTransferred = true
+  session.transferTime = Date.now()
+
+  // Pausar el temporizador de inactividad
+  session.pauseInactivityTimer()
+
+  // Registrar en logs que un agente inició la conversación
+  console.log(`[HUMAN_AGENT] User ${chatId} is now being attended by a human agent`)
+  console.log(`[HUMAN_AGENT] Bot will remain silent until end of human support is detected`)
+
+  // Actualizar actividad para evitar que se marque como inactivo
+  session.updateLastActivity()
+
+  // No enviar ningún mensaje automático del bot - el agente ya está hablando
+  return true
+}
+
 export async function handleMessage(sock, chatId, messageContent, msg, sessionManager, surveyManager) {
   try {
     console.log(`[MESSAGE] Handling message from ${chatId}: ${messageContent}`)
@@ -218,9 +257,29 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       messageTracker.trackHumanMessage(messageId)
     }
 
-    // IMPORTANTE: Verificar primero si es un mensaje de fin de atención humana
+    // NUEVA FUNCIONALIDAD: Verificar si es un mensaje de INICIO de atención humana
+    if (isStartHumanSupportMessage(messageContent)) {
+      console.log(`[HUMAN_AGENT] Human support START message detected: "${messageContent}"`)
+
+      // Obtener o crear la sesión
+      const session = sessionManager.getSession(chatId)
+
+      // Registrar el mensaje en la conversación
+      if (conversationLogger && session.conversationId) {
+        await conversationLogger.logMessage(session.conversationId, chatId, "user", messageContent, session.chatId)
+      } else if (conversationLogger && !session.conversationId) {
+        session.conversationId = await conversationLogger.startConversation(chatId)
+        await conversationLogger.logMessage(session.conversationId, chatId, "user", messageContent, session.chatId)
+      }
+
+      // Iniciar atención humana desde agente
+      await startHumanSupportFromAgent(sock, chatId, session, messageContent)
+      return
+    }
+
+    // IMPORTANTE: Verificar si es un mensaje de fin de atención humana
     if (isEndHumanSupportMessage(messageContent)) {
-      console.log(`[HUMAN] Human support end message detected: "${messageContent}"`)
+      console.log(`[HUMAN] Human support END message detected: "${messageContent}"`)
 
       // Verificar si realmente es un mensaje humano o del bot
       if (messageOrigin === "bot" || messageOrigin === "likely-bot") {
@@ -289,6 +348,16 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
         console.log(`[CONV_LOG] User message logged: "${messageContent.substring(0, 50)}..."`)
       }
 
+      // NUEVA VERIFICACIÓN: Si estamos en atención humana, ignorar el procesamiento del bot
+      if (session.isWaitingForHumanResponse && session.isTransferred) {
+        console.log(`[HUMAN_AGENT] User ${chatId} is being attended by human agent, bot remains silent`)
+        console.log(`[HUMAN_AGENT] Message from user: "${messageContent}"`)
+
+        // Solo actualizar la actividad para mantener la sesión viva
+        session.updateLastActivity()
+        return
+      }
+
       // Verificar si la sesión fue abandonada y el usuario vuelve
       if (session.wasAbandoned()) {
         console.log(`[SESSION] User ${chatId} returned after abandoning the chat`)
@@ -303,8 +372,8 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
         return
       }
 
-      // Verificar si estamos esperando respuesta humana
-      if (!msg.key.fromMe && session.isWaitingForHumanResponse) {
+      // Verificar si estamos esperando respuesta humana (modo transferencia normal)
+      if (!msg.key.fromMe && session.isWaitingForHumanResponse && !session.isTransferred) {
         console.log(`[HUMAN] Message received while waiting for human response, ignoring bot processing`)
         return
       }
@@ -577,5 +646,4 @@ export async function handleMessage(sock, chatId, messageContent, msg, sessionMa
       console.error(`[ERROR] Error sending error message:`, sendError)
     }
   }
-  
 }

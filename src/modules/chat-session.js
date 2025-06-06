@@ -51,6 +51,10 @@ export class ChatSession {
     this.isAbandoned = false
     this.abandonedAt = null
 
+    // NUEVA PROPIEDAD: Para distinguir entre transferencia normal y atención desde contact center
+    this.isHumanAgentActive = false
+    this.humanAgentStartTime = null
+
     // Callbacks para el temporizador - SIEMPRE DEFINIDOS
     this.warningCallback = null
     this.endCallback = null
@@ -129,6 +133,48 @@ export class ChatSession {
     return this.isAbandoned
   }
 
+  // NUEVOS MÉTODOS PARA MANEJO DE AGENTE HUMANO DESDE CONTACT CENTER
+
+  /**
+   * Activa el modo de agente humano desde contact center
+   */
+  activateHumanAgent() {
+    console.log(`[HUMAN_AGENT] Activating human agent mode for ${this.chatId}`)
+    this.isHumanAgentActive = true
+    this.humanAgentStartTime = Date.now()
+    this.isTransferred = true
+    this.isWaitingForHumanResponse = true
+    this.pauseInactivityTimer()
+  }
+
+  /**
+   * Desactiva el modo de agente humano
+   */
+  deactivateHumanAgent() {
+    console.log(`[HUMAN_AGENT] Deactivating human agent mode for ${this.chatId}`)
+    this.isHumanAgentActive = false
+    this.humanAgentStartTime = null
+    this.isTransferred = false
+    this.isWaitingForHumanResponse = false
+
+    // No reanudar automáticamente el timer aquí - se hará cuando se inicie la encuesta
+  }
+
+  /**
+   * Verifica si hay un agente humano activo
+   */
+  isHumanAgentActiveNow() {
+    return this.isHumanAgentActive && this.isTransferred
+  }
+
+  /**
+   * Obtiene el tiempo que lleva activo el agente humano
+   */
+  getHumanAgentDuration() {
+    if (!this.humanAgentStartTime) return 0
+    return Date.now() - this.humanAgentStartTime
+  }
+
   startInactivityTimer(warningCallback, endCallback) {
     this.clearAllTimers()
 
@@ -142,6 +188,12 @@ export class ChatSession {
     this.endCallback = endCallback
 
     console.log(`[TIMER] Starting inactivity timer for user ${this.chatId} (2 minutes)`)
+
+    // Debug: verificar que los callbacks son funciones válidas
+    console.log(`[TIMER] 🔍 Debug - warningCallback type: ${typeof warningCallback}`)
+    console.log(`[TIMER] 🔍 Debug - endCallback type: ${typeof endCallback}`)
+    console.log(`[TIMER] 🔍 Debug - isTransferred: ${this.isTransferred}`)
+    console.log(`[TIMER] 🔍 Debug - isTimerPaused: ${this.isTimerPaused}`)
 
     this.inactivityTimer = setTimeout(
       async () => {
@@ -215,9 +267,12 @@ export class ChatSession {
     // Asegurar que otras propiedades estén correctamente configuradas
     this.isWaitingForHumanResponse = false
 
+    // IMPORTANTE: Desactivar el modo de agente humano al iniciar la encuesta
+    this.deactivateHumanAgent()
+
     // Registrar el estado actual para depuración
     console.log(
-      `[SURVEY] Survey state after reset: active=${this.isSurveyActive}, question=${this.currentSurveyQuestion}, waitingForHuman=${this.isWaitingForHumanResponse}`,
+      `[SURVEY] Survey state after reset: active=${this.isSurveyActive}, question=${this.currentSurveyQuestion}, waitingForHuman=${this.isWaitingForHumanResponse}, humanAgent=${this.isHumanAgentActive}`,
     )
 
     return true
@@ -290,6 +345,10 @@ export class ChatSession {
     this.abandonedAt = null
     this.warningCallback = null
     this.endCallback = null
+
+    // Limpiar propiedades de agente humano
+    this.isHumanAgentActive = false
+    this.humanAgentStartTime = null
   }
 
   // Método para verificar si la sesión está en un estado válido

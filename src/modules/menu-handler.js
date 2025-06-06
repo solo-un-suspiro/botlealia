@@ -6,11 +6,13 @@ export async function handleMainMenu(sock, chatId, option, session) {
   console.log(`[MENU] User selected main menu option: ${option}`)
   switch (option) {
     case "1": // Olvidé Usuario o Contraseña
-      console.log(`[MENU] Starting password recovery flow for user ${chatId}`)
-      await sendMessage(sock, chatId, "Con gusto te apoyamos. ¿Me confirmas RFC a 10 dígitos? Por favor.")
-      session.clearUserData()
-      session.setUserDataCollection("rfc")
-      session.menuState.currentStep = "USER_PASSWORD_RFC"
+      console.log(`[MENU] User ${chatId} requesting password reset`)
+      await sendMessage(
+        sock,
+        chatId,
+        "🔐 *¿Necesitas cambiar tu contraseña?* Sigue estos pasos:\n\n1️⃣ Ingresa al portal: https://tienda.lealia.com.mx/iniciar-sesion\n\n2️⃣ Da clic en *\"¿Olvidaste tu contraseña?\"*\n\n3️⃣ Ingresa tu número de teléfono. Te enviaremos un *código de recuperación* a tu WhatsApp 📲\n\n4️⃣ Ingresa el código recibido y escribe tu *nueva contraseña* 🔑\n\n5️⃣ ¡Listo! Ya puedes iniciar sesión en tu portal, buscar tus productos y realizar tus compras 🛒✨",
+      )
+      await showClosingMenu(sock, chatId, session)
       break
     case "2": // Problemas con mi pedido
       console.log(`[MENU] Starting order problems flow for user ${chatId}`)
@@ -26,7 +28,7 @@ export async function handleMainMenu(sock, chatId, option, session) {
       await sendMessage(
         sock,
         chatId,
-        "🛒✨ ¡Excelente! Puedes realizar tu pedido especial directamente en nuestro portal especializado:\n\n🔗 https://tienda.lealia.com.mx/pedidos-especiales\n\n📋 En esta sección encontrarás:\n• Productos exclusivos 🎁\n• Opciones de personalización 🎨\n• Pedidos por volumen 📦\n• Artículos especiales ⭐\n\n💡 Si necesitas ayuda navegando el portal o tienes dudas sobre algún producto especial, ¡no dudes en contactarnos!",
+        "🛒✨ *¡Excelente!* Puedes realizar tu *pedido especial* directamente en nuestro portal especializado:\n\n🔗 https://tienda.lealia.com.mx/pedidos-especiales\n\n🛍️ *Tiendas disponibles para pedidos especiales:*\nLiverpool, Sam's Club, Walmart, Costco o tiendas de marcas reconocidas.\n\n📌 *Importante:*\nIngresa *todos tus datos completos* para realizar tu compra correctamente.\nColoca el *código postal de entrega (Sucursal Nostos)* al buscar disponibilidad del producto.\n\n⚠️ *Nota:*\nLos pedidos de supermercado *no se realizan* en esta sección.\nPara eso, puedes adquirir una *Gift Card* de:\n• Walmart Cashi\n• Soriana\n• Chedraui\nDesde el apartado de *Gift Cards*.\n\n💡 Si necesitas ayuda navegando el portal o tienes dudas sobre algún producto especial, ¡no dudes en contactarnos!",
       )
       await showClosingMenu(sock, chatId, session)
       break
@@ -188,10 +190,13 @@ export async function handlePortalProblems(sock, chatId, option, session) {
   switch (option) {
     case "1": // No puedo accesar con mis credenciales
       console.log(`[PORTAL] User ${chatId} reporting access problems`)
-      await sendMessage(sock, chatId, "Con gusto te apoyamos. ¿Me confirmas RFC a 10 dígitos? Por favor.")
-      session.clearUserData()
-      session.setUserDataCollection("rfc")
-      session.menuState.currentStep = "PORTAL_ACCESS_RFC"
+      console.log(`[MENU] User ${chatId} requesting password reset`)
+      await sendMessage(
+        sock,
+        chatId,
+        "🔐 *¿Necesitas cambiar tu contraseña?* Sigue estos pasos:\n\n1️⃣ Ingresa al portal: https://tienda.lealia.com.mx/iniciar-sesion\n\n2️⃣ Da clic en *\"¿Olvidaste tu contraseña?\"*\n\n3️⃣ Ingresa tu número de teléfono. Te enviaremos un *código de recuperación* a tu WhatsApp 📲\n\n4️⃣ Ingresa el código recibido y escribe tu *nueva contraseña* 🔑\n\n5️⃣ ¡Listo! Ya puedes iniciar sesión en tu portal, buscar tus productos y realizar tus compras 🛒✨",
+      )
+      await showClosingMenu(sock, chatId, session)
       break
     case "2": // No puedo realizar pedido
       console.log(`[PORTAL] User ${chatId} reporting order creation problems`)
